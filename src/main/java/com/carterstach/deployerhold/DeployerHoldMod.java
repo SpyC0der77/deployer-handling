@@ -21,6 +21,6 @@ public class DeployerHoldMod {
     }
 
     private void onCommonSetup(FMLCommonSetupEvent event) {
-        LOGGER.info("Deployer Hold ready — Deployers can cycle into Hold mode for Simulated handles.");
+        LOGGER.info("Deployer Hold ready — Deployers can cycle into Grip: Pull / Grip: Hitch for Simulated handles.");
     }
 }

@@ -16,12 +16,17 @@ public class DeployerModeMixin {
     private static DeployerBlockEntity.Mode[] $VALUES;
 
     @Inject(method = "<clinit>", at = @At("TAIL"))
-    private static void deployerhold$addHoldMode(CallbackInfo ci) {
-        DeployerBlockEntity.Mode hold = DeployerModeInvoker.deployerhold$create("HOLD", $VALUES.length);
-        DeployerBlockEntity.Mode[] expanded = new DeployerBlockEntity.Mode[$VALUES.length + 1];
+    private static void deployerhold$addGripModes(CallbackInfo ci) {
+        DeployerBlockEntity.Mode pull = DeployerModeInvoker.deployerhold$create("HOLD_PULL", $VALUES.length);
+        DeployerBlockEntity.Mode hitch = DeployerModeInvoker.deployerhold$create("HOLD_HITCH", $VALUES.length + 1);
+
+        DeployerBlockEntity.Mode[] expanded = new DeployerBlockEntity.Mode[$VALUES.length + 2];
         System.arraycopy($VALUES, 0, expanded, 0, $VALUES.length);
-        expanded[$VALUES.length] = hold;
+        expanded[$VALUES.length] = pull;
+        expanded[$VALUES.length + 1] = hitch;
         $VALUES = expanded;
-        DeployerHoldModes.HOLD = hold;
+
+        DeployerHoldModes.HOLD_PULL = pull;
+        DeployerHoldModes.HOLD_HITCH = hitch;
     }
 }

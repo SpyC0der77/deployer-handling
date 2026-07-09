@@ -8,7 +8,7 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Hold mode must never punch or right-click — grabbing is handled on the block entity.
+ * Grip modes must never punch or right-click — latching is handled on the block entity.
  */
 @Mixin(DeployerHandler.class)
 public class DeployerHandlerMixin {
@@ -18,7 +18,7 @@ public class DeployerHandlerMixin {
             cancellable = true,
             remap = false
     )
-    private static void deployerhold$skipHoldActivate(
+    private static void deployerhold$skipGripActivate(
             DeployerFakePlayer player,
             Vec3 vec,
             BlockPos clickedPos,
@@ -26,7 +26,7 @@ public class DeployerHandlerMixin {
             DeployerBlockEntity.Mode mode,
             CallbackInfo ci
     ) {
-        if (DeployerHoldModes.isHold(mode))
+        if (DeployerHoldModes.isGrip(mode))
             ci.cancel();
     }
 }

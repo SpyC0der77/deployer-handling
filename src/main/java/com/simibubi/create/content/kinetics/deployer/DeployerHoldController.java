@@ -32,8 +32,8 @@ import org.joml.Quaterniond;
 import org.joml.Vector3d;
 
 /**
- * Runtime hold-session state for a Deployer in Hold mode.
- * Links the deployer's sub-level to a Simulated handle on another sub-level
+ * Runtime grip-session state for a Deployer in Grip: Pull / Grip: Hitch.
+ * Links the Deployer's sub-level to a Simulated handle on another sub-level
  * using a Sable free constraint (same approach as player handle grabs).
  */
 public class DeployerHoldController {
@@ -89,7 +89,7 @@ public class DeployerHoldController {
     }
 
     /**
-     * Called when the deployer arm finishes extending in Hold mode.
+     * Called when the deployer arm finishes extending in a grip mode.
      */
     public void onArmFullyExtended() {
         if (holding) {
@@ -100,7 +100,7 @@ public class DeployerHoldController {
     }
 
     /**
-     * Called every tick while a hold is active (skips Create's expand/retract cycle).
+     * Called every tick while a grip is active (skips Create's expand/retract cycle).
      */
     public void sustainHold() {
         if (!holding)
@@ -295,6 +295,10 @@ public class DeployerHoldController {
     private void rebuildConstraint(ServerSubLevel deployerSubLevel, ServerSubLevel handleSubLevel, HandleBlockEntity handle) {
         removeConstraint();
 
+        Level level = deployer.getLevel();
+        if (level == null)
+            return;
+
         ServerSubLevelContainer container = SubLevelContainer.getContainer(deployerSubLevel.getLevel());
         if (container == null)
             return;
@@ -302,12 +306,26 @@ public class DeployerHoldController {
         SubLevelPhysicsSystem physicsSystem = container.physicsSystem();
         Vector3d grip = getDeployerGripPoint();
         Vector3d grab = handle.getGrabCenter();
+        boolean hitch = DeployerHoldModes.isHitch(deployer.mode);
 
-        constraintHandle = physicsSystem.getPipeline().addConstraint(
-                deployerSubLevel,
-                handleSubLevel,
-                new FreeConstraintConfiguration(grip, grab, new Quaterniond())
-        );
+        // Player shift-grab: world goal at the holder, constrained body = handle sub-level.
+        // Player no-shift: entity moves to the handle — for Deployers, constrain the Deployer's
+        // sub-level toward the handle grab (projected into world space).
+        if (hitch) {
+            Vector3d grabWorld = Sable.HELPER.projectOutOfSubLevel(level, grab, new Vector3d());
+            constraintHandle = physicsSystem.getPipeline().addConstraint(
+                    null,
+                    deployerSubLevel,
+                    new FreeConstraintConfiguration(grabWorld, grip, new Quaterniond())
+            );
+        } else {
+            Vector3d gripWorld = Sable.HELPER.projectOutOfSubLevel(level, grip, new Vector3d());
+            constraintHandle = physicsSystem.getPipeline().addConstraint(
+                    null,
+                    handleSubLevel,
+                    new FreeConstraintConfiguration(gripWorld, grab, new Quaterniond())
+            );
+        }
 
         if (constraintHandle == null)
             return;

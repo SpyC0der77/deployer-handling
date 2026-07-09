@@ -49,7 +49,7 @@ public abstract class DeployerBlockEntityMixin extends KineticBlockEntity
     }
 
     @Inject(method = "changeMode", at = @At("HEAD"), cancellable = true, remap = false)
-    private void deployerhold$cycleThreeModes(CallbackInfo ci) {
+    private void deployerhold$cycleModes(CallbackInfo ci) {
         DeployerBlockEntity self = (DeployerBlockEntity) (Object) this;
         self.mode = DeployerHoldModes.next(self.mode);
         deployerhold$controller().onModeChanged();
@@ -61,7 +61,7 @@ public abstract class DeployerBlockEntityMixin extends KineticBlockEntity
     @Inject(method = "start", at = @At("HEAD"), cancellable = true, remap = false)
     private void deployerhold$startOnlyWithHandle(CallbackInfo ci) {
         DeployerBlockEntity self = (DeployerBlockEntity) (Object) this;
-        if (!DeployerHoldModes.isHold(self.mode))
+        if (!DeployerHoldModes.isGrip(self.mode))
             return;
 
         if (deployerhold$controller().getHeldHandlePos() == null
@@ -74,7 +74,7 @@ public abstract class DeployerBlockEntityMixin extends KineticBlockEntity
     @Inject(method = "activate", at = @At("HEAD"), cancellable = true, remap = false)
     private void deployerhold$onActivate(CallbackInfo ci) {
         DeployerBlockEntity self = (DeployerBlockEntity) (Object) this;
-        if (!DeployerHoldModes.isHold(self.mode))
+        if (!DeployerHoldModes.isGrip(self.mode))
             return;
 
         deployerhold$controller().onArmFullyExtended();
@@ -93,7 +93,7 @@ public abstract class DeployerBlockEntityMixin extends KineticBlockEntity
     )
     private void deployerhold$keepExtendedWhileHolding(CallbackInfo ci) {
         DeployerBlockEntity self = (DeployerBlockEntity) (Object) this;
-        if (!DeployerHoldModes.isHold(self.mode))
+        if (!DeployerHoldModes.isGrip(self.mode))
             return;
         if (!deployerhold$controller().isHolding())
             return;
@@ -113,7 +113,7 @@ public abstract class DeployerBlockEntityMixin extends KineticBlockEntity
     )
     private void deployerhold$tickWhileHolding(CallbackInfo ci) {
         DeployerBlockEntity self = (DeployerBlockEntity) (Object) this;
-        if (!DeployerHoldModes.isHold(self.mode))
+        if (!DeployerHoldModes.isGrip(self.mode))
             return;
         if (!deployerhold$controller().isHolding())
             return;
@@ -135,14 +135,15 @@ public abstract class DeployerBlockEntityMixin extends KineticBlockEntity
     @Inject(method = "getHandPose", at = @At("HEAD"), cancellable = true, remap = false)
     private void deployerhold$holdHandPose(CallbackInfoReturnable<PartialModel> cir) {
         DeployerBlockEntity self = (DeployerBlockEntity) (Object) this;
-        if (DeployerHoldModes.isHold(self.mode))
+        if (DeployerHoldModes.isGrip(self.mode))
             cir.setReturnValue(AllPartialModels.DEPLOYER_HAND_HOLDING);
     }
 
     @Inject(method = "addToGoggleTooltip", at = @At("HEAD"), cancellable = true, remap = false)
     private void deployerhold$holdGoggleTooltip(List<?> tooltip, boolean isPlayerSneaking, CallbackInfoReturnable<Boolean> cir) {
         DeployerBlockEntity self = (DeployerBlockEntity) (Object) this;
-        if (!DeployerHoldModes.isHold(self.mode))
+        String modeKey = DeployerHoldModes.tooltipKey(self.mode);
+        if (modeKey == null)
             return;
 
         @SuppressWarnings("unchecked")
@@ -150,7 +151,7 @@ public abstract class DeployerBlockEntityMixin extends KineticBlockEntity
 
         CreateLang.translate("tooltip.deployer.header").forGoggles(components);
         components.add(Component.literal("    ").append(
-                Component.translatable("deployerhold.tooltip.deployer.holding").withStyle(ChatFormatting.YELLOW)
+                Component.translatable(modeKey).withStyle(ChatFormatting.YELLOW)
         ));
 
         if (deployerhold$controller().isHolding()) {
@@ -175,6 +176,13 @@ public abstract class DeployerBlockEntityMixin extends KineticBlockEntity
         deployerhold$controller().write(compound, registries);
     }
 
+    @Inject(method = "read", at = @At("HEAD"), remap = false)
+    private void deployerhold$migrateLegacyHoldMode(CompoundTag compound, HolderLookup.Provider registries, boolean clientPacket, CallbackInfo ci) {
+        // Older builds saved Mode as "HOLD"; map that to Grip: Pull.
+        if ("HOLD".equals(compound.getString("Mode")))
+            compound.putString("Mode", "HOLD_PULL");
+    }
+
     @Inject(method = "read", at = @At("TAIL"), remap = false)
     private void deployerhold$readHold(CompoundTag compound, HolderLookup.Provider registries, boolean clientPacket, CallbackInfo ci) {
         deployerhold$controller().read(compound, registries);
@@ -189,7 +197,7 @@ public abstract class DeployerBlockEntityMixin extends KineticBlockEntity
     @Override
     public void sable$physicsTick(ServerSubLevel subLevel, RigidBodyHandle handle, double timeStep) {
         DeployerBlockEntity self = (DeployerBlockEntity) (Object) this;
-        if (!DeployerHoldModes.isHold(self.mode))
+        if (!DeployerHoldModes.isGrip(self.mode))
             return;
         deployerhold$controller().physicsTick(subLevel);
     }

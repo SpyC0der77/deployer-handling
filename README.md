@@ -1,12 +1,15 @@
 # Deployer Hold
 
-A NeoForge 1.21.1 Create addon that adds a third **Hold** mode to Deployers.
+A NeoForge 1.21.1 Create addon that adds **Grip: Pull** and **Grip: Hitch** modes to Deployers.
 
 ## What it does
 
-Create Deployers normally have two wrench modes: **Use** and **Attack**. This mod adds **Hold**.
+Create Deployers normally have two wrench modes: **Use** and **Attack**. This mod adds two grip modes that latch onto [Create Simulated](https://github.com/Creators-of-Aeronautics/Simulated-Project) handles across [Sable](https://github.com/ryanhcode/sable) sub-levels.
 
-In Hold mode, a Deployer on Sable sub-level A can grab a [Create Simulated](https://github.com/Creators-of-Aeronautics/Simulated-Project) handle on sub-level B. While holding, movement of the Deployer's sub-level pulls the handle (and its sub-level) with it via a Sable physics constraint — the same approach Simulated uses for player handle grabs.
+| Mode | Analogy | Result |
+| --- | --- | --- |
+| **Grip: Pull** | Player shift-grabbing a handle | Handle’s sub-level is dragged by the Deployer’s sub-level |
+| **Grip: Hitch** | Player right-click grab (no shift) | Deployer’s sub-level rides / follows the handle’s sub-level |
 
 ## Requirements
 
@@ -19,12 +22,12 @@ In Hold mode, a Deployer on Sable sub-level A can grab a [Create Simulated](http
 
 1. Place a Deployer on one Sable sub-level and a Simulated handle on another.
 2. Point the Deployer at the handle (2–3 blocks ahead).
-3. Wrench the Deployer's front face until goggles show `Mode: Hold`.
+3. Wrench the Deployer’s front face to cycle modes.
 4. Power the Deployer. Its arm extends, grabs the handle, and stays extended while the grip holds.
-5. Moving sub-level A moves the held handle / sub-level B with it.
+5. Moving either linked structure follows the chosen polarity.
 6. Redstone lock or stopping rotation releases the grip.
 
-Wrench cycle: **Use → Hold → Attack → Use**.
+Wrench cycle: **Use → Grip: Pull → Grip: Hitch → Attack → Use**.
 
 ## Build
 

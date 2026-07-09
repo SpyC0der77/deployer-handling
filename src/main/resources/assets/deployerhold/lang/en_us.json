@@ -1,4 +1,5 @@
 {
-  "deployerhold.tooltip.deployer.holding": "Mode: Hold",
+  "deployerhold.tooltip.deployer.grip_pull": "Mode: Grip: Pull",
+  "deployerhold.tooltip.deployer.grip_hitch": "Mode: Grip: Hitch",
   "deployerhold.tooltip.deployer.holding_handle": "Holding a Simulated handle"
 }

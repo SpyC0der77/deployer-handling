@@ -1,53 +1,38 @@
-# Create Mod Addon Template
+# Deployer Hold
 
-A ready-to-use template for building [Create](https://modrinth.com/mod/create) mod addons with **Java** and **NeoForge 1.21.1**.
+A NeoForge 1.21.1 Create addon that adds a third **Hold** mode to Deployers.
 
-## What's Included
+## What it does
 
-- **NeoForge 1.21.1** with Create 6.0.10 dependency
-- **Create Registrate** — Create's registration system, pre-configured
-- **Ponder & Flywheel** — Create's rendering and documentation libraries
-- **JEI** — recipe viewer integration (optional, compile-only)
-- **Mixin support** — pre-configured mixins
-- **GitHub Actions** — automatic builds on push/PR
-- **Gradle 8.10** with configuration cache enabled
+Create Deployers normally have two wrench modes: **Use** and **Attack**. This mod adds **Hold**.
 
-## Getting Started
+In Hold mode, a Deployer on Sable sub-level A can grab a [Create Simulated](https://github.com/Creators-of-Aeronautics/Simulated-Project) handle on sub-level B. While holding, movement of the Deployer's sub-level pulls the handle (and its sub-level) with it via a Sable physics constraint — the same approach Simulated uses for player handle grabs.
 
-### 1. Use this template
+## Requirements
 
-Click **"Use this template"** on GitHub, or clone and rename.
+- Minecraft 1.21.1 + NeoForge
+- Create 6.0.9+
+- Sable 2.0+
+- Create Simulated 1.0+
 
-### 2. Configure your mod
+## Usage
 
-Edit `gradle.properties`:
+1. Place a Deployer on one Sable sub-level and a Simulated handle on another.
+2. Point the Deployer at the handle (2–3 blocks ahead).
+3. Wrench the Deployer's front face until goggles show `Mode: Hold`.
+4. Power the Deployer. Its arm extends, grabs the handle, and stays extended while the grip holds.
+5. Moving sub-level A moves the held handle / sub-level B with it.
+6. Redstone lock or stopping rotation releases the grip.
 
-```properties
-mod_id=yourmod
-mod_name=Your Mod Name
-mod_version=0.1.0
-mod_group_id=com.yourname.yourmod
-mod_authors=YourName
-mod_description=Your mod description.
-mod_license=MIT
-```
+Wrench cycle: **Use → Hold → Attack → Use**.
 
-### 3. Rename packages
-
-1. Rename `src/main/java/com/example/examplemod/` to match your `mod_group_id`
-2. Update `ExampleMod.java` — change `ID` to your `mod_id`
-3. Rename `src/main/resources/examplemod.mixins.json` to `{mod_id}.mixins.json`
-4. Update the package path inside the mixins JSON
-
-### 4. Build and run
+## Build
 
 ```bash
-./gradlew build          # Build the mod
-./gradlew runClient      # Launch Minecraft with your mod
-./gradlew runServer      # Launch a dedicated server
-./gradlew runData        # Run data generators
+./gradlew build
+./gradlew runClient
 ```
 
 ## License
 
-This template is provided under the [MIT License](LICENSE). Your mod built from this template can use any license you choose.
+MIT

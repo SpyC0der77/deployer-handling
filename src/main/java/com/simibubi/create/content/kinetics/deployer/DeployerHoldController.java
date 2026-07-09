@@ -116,9 +116,26 @@ public class DeployerHoldController {
         }
 
         keepArmExtended();
+        // Refresh the physics joint from the game tick as a fallback for cases where
+        // Sable has not yet registered this Deployer as a BlockEntitySubLevelActor.
+        updateConstraintFromGameTick();
     }
 
     public void physicsTick(ServerSubLevel deployerSubLevel) {
+        updateConstraint(deployerSubLevel);
+    }
+
+    private void updateConstraintFromGameTick() {
+        Level level = deployer.getLevel();
+        if (level == null || level.isClientSide)
+            return;
+
+        SubLevel deployerSubLevel = Sable.HELPER.getContaining(deployer);
+        if (deployerSubLevel instanceof ServerSubLevel serverDeployerSubLevel)
+            updateConstraint(serverDeployerSubLevel);
+    }
+
+    private void updateConstraint(ServerSubLevel deployerSubLevel) {
         if (!holding || heldHandlePos == null)
             return;
 

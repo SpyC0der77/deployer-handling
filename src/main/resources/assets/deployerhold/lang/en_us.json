@@ -1,5 +1,9 @@
 {
   "deployerhold.tooltip.deployer.grip_pull": "Mode: Grip: Pull",
   "deployerhold.tooltip.deployer.grip_hitch": "Mode: Grip: Hitch",
-  "deployerhold.tooltip.deployer.holding_handle": "Holding a Simulated handle"
+  "deployerhold.tooltip.deployer.holding_handle": "Holding a Simulated handle",
+  "deployerhold.tooltip.deployer.latch_latched": "Latch: Latched",
+  "deployerhold.tooltip.deployer.latch_ready": "Latch: Handle in range",
+  "deployerhold.tooltip.deployer.latch_open": "Latch: Open",
+  "deployerhold.tooltip.deployer.latch_locked": "Latch: Target locked — won't move"
 }

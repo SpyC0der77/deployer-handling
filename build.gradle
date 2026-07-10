@@ -14,6 +14,21 @@ repositories {
     maven { url = "https://maven.createmod.net" }
     maven { url = "https://mvn.devos.one/snapshots" }
     maven { url = "https://maven.blamejared.com/" }
+    maven {
+        name = "RyanHCode Maven"
+        url = "https://maven.ryanhcode.dev/releases"
+    }
+    exclusiveContent {
+        forRepository {
+            maven {
+                name = "Modrinth"
+                url = "https://api.modrinth.com/maven"
+            }
+        }
+        filter {
+            includeGroup "maven.modrinth"
+        }
+    }
 }
 
 base {
@@ -24,6 +39,10 @@ java.toolchain.languageVersion = JavaLanguageVersion.of(21)
 
 neoForge {
     version = project.neo_version
+
+    accessTransformers {
+        file('src/main/resources/META-INF/accesstransformer.cfg')
+    }
 
     parchment {
         mappingsVersion = project.parchment_mappings_version
@@ -75,6 +94,20 @@ dependencies {
     compileOnly("dev.engine-room.flywheel:flywheel-neoforge-api-${minecraft_version}:${flywheel_version}")
     runtimeOnly("dev.engine-room.flywheel:flywheel-neoforge-${minecraft_version}:${flywheel_version}")
     implementation("com.tterrag.registrate:Registrate:${registrate_version}")
+
+    // Sable + Create Simulated
+    implementation("dev.ryanhcode.sable-companion:sable-companion-common-${minecraft_version}:${sable_companion_version}")
+    implementation("dev.ryanhcode.sable:sable-neoforge-${minecraft_version}:${sable_version}")
+    implementation("dev.simulated_team.simulated:simulated-neoforge-${minecraft_version}:${simulated_version}") {
+        exclude group: "foundry.veil"
+        exclude group: "maven.modrinth"
+        exclude group: "top.theillusivec4.curios"
+        exclude group: "cc.tweaked"
+        exclude group: "mezz.jei"
+    }
+    runtimeOnly("foundry.veil:veil-neoforge-${minecraft_version}:${veil_version}") {
+        exclude group: "maven.modrinth"
+    }
 
     // JEI (optional — for recipe integration)
     compileOnly "mezz.jei:jei-${minecraft_version}-common-api:${jei_version}"

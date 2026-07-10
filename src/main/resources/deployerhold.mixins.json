@@ -1,0 +1,16 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.carterstach.deployerhold.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "refmap": "deployerhold.refmap.json",
+  "mixins": [
+    "DeployerModeMixin",
+    "DeployerBlockEntityMixin",
+    "DeployerHandlerMixin"
+  ],
+  "client": [],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

@@ -110,9 +110,11 @@ public abstract class DeployerBlockEntityMixin extends KineticBlockEntity
             at = @At(
                     value = "INVOKE",
                     target = "Lcom/simibubi/create/content/kinetics/base/KineticBlockEntity;tick()V",
-                    shift = At.Shift.AFTER
+                    shift = At.Shift.AFTER,
+                    remap = false
             ),
-            cancellable = true
+            cancellable = true,
+            remap = false
     )
     private void deployerhold$tickWhileHolding(CallbackInfo ci) {
         DeployerBlockEntity self = (DeployerBlockEntity) (Object) this;

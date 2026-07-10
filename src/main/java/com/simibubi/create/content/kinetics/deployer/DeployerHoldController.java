@@ -41,6 +41,8 @@ public class DeployerHoldController {
     private static final double BOUNDING = 5.0;
     private static final double CONSTRAINT_DAMPING = 30.0;
     private static final double CONSTRAINT_STIFFNESS = 240.0;
+    /** Skip rebuild when the world-space goal hasn't moved (~1 mm). */
+    private static final double GOAL_EPSILON_SQ = 1.0e-6;
 
     private final DeployerBlockEntity deployer;
 
@@ -51,6 +53,8 @@ public class DeployerHoldController {
     private boolean physicsPathActive;
     private boolean lastConstraintHitch;
     private @Nullable BlockPos lastConstraintHandlePos;
+    private final Vector3d lastWorldGoal = new Vector3d();
+    private boolean hasLastWorldGoal;
 
     public DeployerHoldController(DeployerBlockEntity deployer) {
         this.deployer = deployer;
@@ -70,6 +74,7 @@ public class DeployerHoldController {
         heldHandlePos = null;
         physicsPathActive = false;
         lastConstraintHandlePos = null;
+        hasLastWorldGoal = false;
     }
 
     public void release() {
@@ -169,17 +174,24 @@ public class DeployerHoldController {
         }
 
         boolean hitch = DeployerHoldModes.isHitch(deployer.mode);
-        boolean endpointsUnchanged = constraintHandle != null
+        Vector3d grip = getDeployerGripPoint();
+        Vector3d grab = handle.getGrabCenter();
+        Vector3d worldGoal = hitch
+                ? Sable.HELPER.projectOutOfSubLevel(level, grab, new Vector3d())
+                : Sable.HELPER.projectOutOfSubLevel(level, grip, new Vector3d());
+
+        // FreeConstraintConfiguration bakes anchors at addConstraint time, so moving goals
+        // need a rebuild — but skip when the joint is still valid and the goal is stable.
+        boolean stable = constraintHandle != null
                 && constraintHandle.isValid()
                 && hitch == lastConstraintHitch
-                && heldHandlePos.equals(lastConstraintHandlePos);
-
-        // Physics ticks must refresh world-space goals each step (matching Simulated
-        // player grabs). Game-tick fallback skips rebuild when the joint is already set.
-        if (!physicsTick && endpointsUnchanged)
+                && heldHandlePos.equals(lastConstraintHandlePos)
+                && hasLastWorldGoal
+                && worldGoal.distanceSquared(lastWorldGoal) < GOAL_EPSILON_SQ;
+        if (stable)
             return;
 
-        rebuildConstraint(deployerSubLevel, handleServerSubLevel, handle, hitch);
+        rebuildConstraint(deployerSubLevel, handleServerSubLevel, hitch, grip, grab, worldGoal);
     }
 
     public static boolean hasHandleTarget(DeployerBlockEntity deployer) {
@@ -314,39 +326,33 @@ public class DeployerHoldController {
     private void rebuildConstraint(
             ServerSubLevel deployerSubLevel,
             ServerSubLevel handleSubLevel,
-            HandleBlockEntity handle,
-            boolean hitch
+            boolean hitch,
+            Vector3d grip,
+            Vector3d grab,
+            Vector3d worldGoal
     ) {
         removeConstraint();
-
-        Level level = deployer.getLevel();
-        if (level == null)
-            return;
 
         ServerSubLevelContainer container = SubLevelContainer.getContainer(deployerSubLevel.getLevel());
         if (container == null)
             return;
 
         SubLevelPhysicsSystem physicsSystem = container.physicsSystem();
-        Vector3d grip = getDeployerGripPoint();
-        Vector3d grab = handle.getGrabCenter();
 
         // Player shift-grab: world goal at the holder, constrained body = handle sub-level.
         // Player no-shift: entity moves to the handle — for Deployers, constrain the Deployer's
         // sub-level toward the handle grab (projected into world space).
         if (hitch) {
-            Vector3d grabWorld = Sable.HELPER.projectOutOfSubLevel(level, grab, new Vector3d());
             constraintHandle = physicsSystem.getPipeline().addConstraint(
                     null,
                     deployerSubLevel,
-                    new FreeConstraintConfiguration(grabWorld, grip, new Quaterniond())
+                    new FreeConstraintConfiguration(worldGoal, grip, new Quaterniond())
             );
         } else {
-            Vector3d gripWorld = Sable.HELPER.projectOutOfSubLevel(level, grip, new Vector3d());
             constraintHandle = physicsSystem.getPipeline().addConstraint(
                     null,
                     handleSubLevel,
-                    new FreeConstraintConfiguration(gripWorld, grab, new Quaterniond())
+                    new FreeConstraintConfiguration(worldGoal, grab, new Quaterniond())
             );
         }
 
@@ -369,6 +375,8 @@ public class DeployerHoldController {
         constraintHandle.setContactsEnabled(true);
         lastConstraintHitch = hitch;
         lastConstraintHandlePos = heldHandlePos;
+        lastWorldGoal.set(worldGoal);
+        hasLastWorldGoal = true;
     }
 
     private void removeConstraint() {
@@ -378,5 +386,6 @@ public class DeployerHoldController {
             constraintHandle = null;
         }
         lastConstraintHandlePos = null;
+        hasLastWorldGoal = false;
     }
 }

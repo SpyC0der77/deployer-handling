@@ -14,9 +14,9 @@ Create Deployers normally have two wrench modes: **Use** and **Attack**. This mo
 ## Requirements
 
 - Minecraft 1.21.1 + NeoForge
-- Create 6.0.9+
-- Sable 2.0+
-- Create Simulated 1.0+
+- Create 6.0.9–6.0.x
+- Sable 2.0.x
+- Create Simulated 1.x
 
 ## Usage
 

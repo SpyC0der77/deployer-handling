@@ -47,6 +47,10 @@ public class DeployerHoldController {
     private @Nullable BlockPos heldHandlePos;
     private boolean holding;
     private @Nullable PhysicsConstraintHandle constraintHandle;
+    /** True once Sable has called this Deployer's physics tick for the active grip. */
+    private boolean physicsPathActive;
+    private boolean lastConstraintHitch;
+    private @Nullable BlockPos lastConstraintHandlePos;
 
     public DeployerHoldController(DeployerBlockEntity deployer) {
         this.deployer = deployer;
@@ -64,6 +68,8 @@ public class DeployerHoldController {
         removeConstraint();
         holding = false;
         heldHandlePos = null;
+        physicsPathActive = false;
+        lastConstraintHandlePos = null;
     }
 
     public void release() {
@@ -86,6 +92,7 @@ public class DeployerHoldController {
                 ? NbtUtils.readBlockPos(tag, "DeployerHoldHandle").orElse(null)
                 : null;
         removeConstraint();
+        physicsPathActive = false;
     }
 
     /**
@@ -116,13 +123,14 @@ public class DeployerHoldController {
         }
 
         keepArmExtended();
-        // Refresh the physics joint from the game tick as a fallback for cases where
-        // Sable has not yet registered this Deployer as a BlockEntitySubLevelActor.
-        updateConstraintFromGameTick();
+        // Game-tick fallback only until Sable's physics callback owns the joint.
+        if (!physicsPathActive)
+            updateConstraintFromGameTick();
     }
 
     public void physicsTick(ServerSubLevel deployerSubLevel) {
-        updateConstraint(deployerSubLevel);
+        physicsPathActive = true;
+        updateConstraint(deployerSubLevel, true);
     }
 
     private void updateConstraintFromGameTick() {
@@ -132,10 +140,10 @@ public class DeployerHoldController {
 
         SubLevel deployerSubLevel = Sable.HELPER.getContaining(deployer);
         if (deployerSubLevel instanceof ServerSubLevel serverDeployerSubLevel)
-            updateConstraint(serverDeployerSubLevel);
+            updateConstraint(serverDeployerSubLevel, false);
     }
 
-    private void updateConstraint(ServerSubLevel deployerSubLevel) {
+    private void updateConstraint(ServerSubLevel deployerSubLevel, boolean physicsTick) {
         if (!holding || heldHandlePos == null)
             return;
 
@@ -160,7 +168,18 @@ public class DeployerHoldController {
             return;
         }
 
-        rebuildConstraint(deployerSubLevel, handleServerSubLevel, handle);
+        boolean hitch = DeployerHoldModes.isHitch(deployer.mode);
+        boolean endpointsUnchanged = constraintHandle != null
+                && constraintHandle.isValid()
+                && hitch == lastConstraintHitch
+                && heldHandlePos.equals(lastConstraintHandlePos);
+
+        // Physics ticks must refresh world-space goals each step (matching Simulated
+        // player grabs). Game-tick fallback skips rebuild when the joint is already set.
+        if (!physicsTick && endpointsUnchanged)
+            return;
+
+        rebuildConstraint(deployerSubLevel, handleServerSubLevel, handle, hitch);
     }
 
     public static boolean hasHandleTarget(DeployerBlockEntity deployer) {
@@ -292,7 +311,12 @@ public class DeployerHoldController {
                 .fma(1.0 + handReach, JOMLConversion.atLowerCornerOf(facing.getNormal()));
     }
 
-    private void rebuildConstraint(ServerSubLevel deployerSubLevel, ServerSubLevel handleSubLevel, HandleBlockEntity handle) {
+    private void rebuildConstraint(
+            ServerSubLevel deployerSubLevel,
+            ServerSubLevel handleSubLevel,
+            HandleBlockEntity handle,
+            boolean hitch
+    ) {
         removeConstraint();
 
         Level level = deployer.getLevel();
@@ -306,7 +330,6 @@ public class DeployerHoldController {
         SubLevelPhysicsSystem physicsSystem = container.physicsSystem();
         Vector3d grip = getDeployerGripPoint();
         Vector3d grab = handle.getGrabCenter();
-        boolean hitch = DeployerHoldModes.isHitch(deployer.mode);
 
         // Player shift-grab: world goal at the holder, constrained body = handle sub-level.
         // Player no-shift: entity moves to the handle — for Deployers, constrain the Deployer's
@@ -344,6 +367,8 @@ public class DeployerHoldController {
         }
 
         constraintHandle.setContactsEnabled(true);
+        lastConstraintHitch = hitch;
+        lastConstraintHandlePos = heldHandlePos;
     }
 
     private void removeConstraint() {
@@ -352,5 +377,6 @@ public class DeployerHoldController {
                 constraintHandle.remove();
             constraintHandle = null;
         }
+        lastConstraintHandlePos = null;
     }
 }

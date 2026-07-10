@@ -89,6 +89,7 @@ public abstract class DeployerBlockEntityMixin extends KineticBlockEntity
                     shift = At.Shift.AFTER,
                     remap = false
             ),
+            cancellable = true,
             remap = false
     )
     private void deployerhold$keepExtendedWhileHolding(CallbackInfo ci) {
@@ -98,8 +99,10 @@ public abstract class DeployerBlockEntityMixin extends KineticBlockEntity
         if (!deployerhold$controller().isHolding())
             return;
 
+        // Cancel so the rest of tick() cannot overwrite EXPANDING with RETRACTING.
         self.state = DeployerBlockEntity.State.EXPANDING;
         self.timer = 0;
+        ci.cancel();
     }
 
     @Inject(
@@ -122,6 +125,7 @@ public abstract class DeployerBlockEntityMixin extends KineticBlockEntity
             deployerhold$controller().release();
             self.state = DeployerBlockEntity.State.WAITING;
             self.timer = 500;
+            self.setChanged();
             self.sendData();
             ci.cancel();
             return;

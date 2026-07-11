@@ -29,7 +29,9 @@ public class DHServer extends ConfigBase {
             Comments.stiffness);
     public final ConfigFloat damping = f(60.0f, 0.0f, 500.0f, "damping",
             Comments.damping);
-    public final ConfigFloat angularDamping = f(4.5f, 0.0f, 100.0f, "angularDamping",
+    public final ConfigFloat angularStiffness = f(80.0f, 0.0f, 2000.0f, "angularStiffness",
+            Comments.angularStiffness);
+    public final ConfigFloat angularDamping = f(8.0f, 0.0f, 100.0f, "angularDamping",
             Comments.angularDamping);
 
     @Override
@@ -52,6 +54,7 @@ public class DHServer extends ConfigBase {
         static final String constraint = "Rider pull toward the anchor";
         static final String stiffness = "Linear motor stiffness for the rider (how quickly it moves toward the anchor). Higher = snappier pull.";
         static final String damping = "Linear motor damping for the rider constraint.";
+        static final String angularStiffness = "Angular motor stiffness that keeps the handle and deployer facing each other. Twist around facing stays free.";
         static final String angularDamping = "Angular motor damping (keeps the gripped body from spinning wildly).";
     }
 }

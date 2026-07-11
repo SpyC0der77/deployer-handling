@@ -49,6 +49,11 @@ public final class DeployerHoldConfig {
         return server().damping.getF();
     }
 
+    /** Facing-alignment stiffness (pitch/yaw toward facing each other). Twist around facing is not driven. */
+    public static double constraintAngularStiffness() {
+        return server().angularStiffness.getF();
+    }
+
     public static double constraintAngularDamping() {
         return server().angularDamping.getF();
     }

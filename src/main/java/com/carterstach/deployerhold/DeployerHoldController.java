@@ -5,7 +5,7 @@ import com.simibubi.create.content.kinetics.deployer.DeployerBlockEntity;
 import dev.ryanhcode.sable.Sable;
 import dev.ryanhcode.sable.api.block.BlockEntitySubLevelActor;
 import dev.ryanhcode.sable.api.physics.constraint.ConstraintJointAxis;
-import dev.ryanhcode.sable.api.physics.constraint.FreeConstraintConfiguration;
+import dev.ryanhcode.sable.api.physics.constraint.GenericConstraintConfiguration;
 import dev.ryanhcode.sable.api.physics.constraint.PhysicsConstraintHandle;
 import dev.ryanhcode.sable.api.sublevel.ServerSubLevelContainer;
 import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
@@ -26,14 +26,17 @@ import net.minecraft.nbt.NbtUtils;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.DirectionalBlock;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import org.jetbrains.annotations.Nullable;
+import org.joml.Matrix3d;
 import org.joml.Quaterniond;
 import org.joml.Vector3d;
+import org.joml.Vector3dc;
 
 /**
  * Runtime grip-session state for a Deployer in Grip: Pull / Grip: Hitch.
@@ -48,6 +51,10 @@ import org.joml.Vector3d;
 public class DeployerHoldController {
     /** Skip rebuild when the world-space goal hasn't moved (~1 mm). */
     private static final double GOAL_EPSILON_SQ = 1.0e-6;
+    /** Facing vectors within this dot are treated as parallel (~2.5°). */
+    private static final double PARALLEL_DOT = 0.999;
+    /** Skip rebuild when facing bases haven't rotated (~2.5°). */
+    private static final double FACING_EPSILON_SQ = 1.0e-4;
 
     private final DeployerBlockEntity deployer;
     private final DeployerHoldAccess access;
@@ -61,7 +68,10 @@ public class DeployerHoldController {
     private boolean lastConstraintHitch;
     private @Nullable BlockPos lastConstraintHandlePos;
     private final Vector3d lastWorldGoal = new Vector3d();
-    private boolean hasLastWorldGoal;
+    private final Vector3d lastLocalAnchor = new Vector3d();
+    private final Vector3d lastWorldFacing = new Vector3d();
+    private final Vector3d lastLocalFacing = new Vector3d();
+    private boolean hasLastConstraintPose;
 
     public DeployerHoldController(DeployerBlockEntity deployer) {
         this.deployer = deployer;
@@ -125,7 +135,7 @@ public class DeployerHoldController {
         heldHandlePos = null;
         physicsPathActive = false;
         lastConstraintHandlePos = null;
-        hasLastWorldGoal = false;
+        hasLastConstraintPose = false;
     }
 
     public void release() {
@@ -231,7 +241,7 @@ public class DeployerHoldController {
         Vector3d grip = getDeployerGripPoint();
         Vector3d grab = handle.getGrabCenter();
         Vector3d worldGoal = Sable.HELPER.projectOutOfSubLevel(level, grip, new Vector3d());
-        rebuildConstraint(null, handleServerSubLevel, false, grip, grab, worldGoal);
+        rebuildConstraint(null, handleServerSubLevel, false, handle, grip, grab, worldGoal);
     }
 
     private void updateConstraint(ServerSubLevel deployerSubLevel) {
@@ -258,7 +268,7 @@ public class DeployerHoldController {
             Vector3d grip = getDeployerGripPoint();
             Vector3d grab = handle.getGrabCenter();
             Vector3d worldGoal = Sable.HELPER.projectOutOfSubLevel(level, grab, new Vector3d());
-            rebuildConstraint(deployerSubLevel, null, true, grip, grab, worldGoal);
+            rebuildConstraint(deployerSubLevel, null, true, handle, grip, grab, worldGoal);
             return;
         }
 
@@ -270,21 +280,31 @@ public class DeployerHoldController {
         boolean hitch = DeployerHoldModes.isHitch(access.deployerhold$getMode());
         Vector3d grip = getDeployerGripPoint();
         Vector3d grab = handle.getGrabCenter();
+        // Pull: rider=handle, anchor=moving tip (worldGoal tracks retract).
+        // Hitch: rider=deployer, anchor=handle; localAnchor must track the
+        // retracting tip or the latch pose stays coincident and never yanks.
         Vector3d worldGoal = hitch
                 ? Sable.HELPER.projectOutOfSubLevel(level, grab, new Vector3d())
                 : Sable.HELPER.projectOutOfSubLevel(level, grip, new Vector3d());
+        Vector3d localAnchor = hitch ? grip : grab;
+        // Antiparallel goal: rider faces the anchor (negate local so bases oppose).
+        Vector3d worldFacing = hitch ? worldFacingOf(handle) : worldFacingOf(deployer);
+        Vector3d localFacing = (hitch ? localFacingOf(deployer) : localFacingOf(handle)).negate();
 
         boolean stable = constraintHandle != null
                 && constraintHandle.isValid()
                 && hitch == lastConstraintHitch
                 && heldHandlePos != null
                 && heldHandlePos.equals(lastConstraintHandlePos)
-                && hasLastWorldGoal
-                && worldGoal.distanceSquared(lastWorldGoal) < GOAL_EPSILON_SQ;
+                && hasLastConstraintPose
+                && worldGoal.distanceSquared(lastWorldGoal) < GOAL_EPSILON_SQ
+                && localAnchor.distanceSquared(lastLocalAnchor) < GOAL_EPSILON_SQ
+                && worldFacing.distanceSquared(lastWorldFacing) < FACING_EPSILON_SQ
+                && localFacing.distanceSquared(lastLocalFacing) < FACING_EPSILON_SQ;
         if (stable)
             return;
 
-        rebuildConstraint(deployerSubLevel, handleServerSubLevel, hitch, grip, grab, worldGoal);
+        rebuildConstraint(deployerSubLevel, handleServerSubLevel, hitch, handle, grip, grab, worldGoal);
     }
 
     private boolean maintainHold() {
@@ -529,6 +549,7 @@ public class DeployerHoldController {
             @Nullable ServerSubLevel deployerSubLevel,
             @Nullable ServerSubLevel handleSubLevel,
             boolean hitch,
+            HandleBlockEntity handle,
             Vector3d grip,
             Vector3d grab,
             Vector3d worldGoal
@@ -546,10 +567,17 @@ public class DeployerHoldController {
         SubLevelPhysicsSystem physicsSystem = container.physicsSystem();
         Vector3d localAnchor = hitch ? grip : grab;
 
+        // Face each other: joint +Z follows world facing and the negated local facing.
+        // Pitch/yaw motors match those axes; twist around facing stays free.
+        Vector3d worldFacing = hitch ? worldFacingOf(handle) : worldFacingOf(deployer);
+        Vector3d localFacing = (hitch ? localFacingOf(deployer) : localFacingOf(handle)).negate();
+        Quaterniond worldBasis = basisFromForward(worldFacing);
+        Quaterniond localBasis = basisFromForward(localFacing);
+
         constraintHandle = physicsSystem.getPipeline().addConstraint(
                 null,
                 constrained,
-                new FreeConstraintConfiguration(worldGoal, localAnchor, new Quaterniond())
+                new GenericConstraintConfiguration(worldGoal, localAnchor, worldBasis, localBasis)
         );
 
         if (constraintHandle == null)
@@ -563,19 +591,67 @@ public class DeployerHoldController {
 
         double stiffness = DeployerHoldConfig.constraintStiffness();
         double damping = DeployerHoldConfig.constraintDamping();
+        double angularStiffness = DeployerHoldConfig.constraintAngularStiffness();
         double angularDamping = DeployerHoldConfig.constraintAngularDamping();
         for (ConstraintJointAxis axis : ConstraintJointAxis.LINEAR) {
             constraintHandle.setMotor(axis, 0.0, stiffness, damping, true, maxForce);
         }
-        for (ConstraintJointAxis axis : ConstraintJointAxis.ANGULAR) {
-            constraintHandle.setMotor(axis, 0.0, 0.0, angularDamping, true, maxForce);
-        }
+        // Drive pitch/yaw toward facing alignment; leave twist (ANGULAR_Z) free.
+        constraintHandle.setMotor(ConstraintJointAxis.ANGULAR_X, 0.0, angularStiffness, angularDamping, true, maxForce);
+        constraintHandle.setMotor(ConstraintJointAxis.ANGULAR_Y, 0.0, angularStiffness, angularDamping, true, maxForce);
+        constraintHandle.setMotor(ConstraintJointAxis.ANGULAR_Z, 0.0, 0.0, angularDamping, true, maxForce);
 
         constraintHandle.setContactsEnabled(true);
         lastConstraintHitch = hitch;
         lastConstraintHandlePos = heldHandlePos;
         lastWorldGoal.set(worldGoal);
-        hasLastWorldGoal = true;
+        lastLocalAnchor.set(localAnchor);
+        lastWorldFacing.set(worldFacing);
+        lastLocalFacing.set(localFacing);
+        hasLastConstraintPose = true;
+    }
+
+    /** Block facing in the block entity's local / plot space. */
+    private static Vector3d localFacingOf(BlockEntity be) {
+        BlockState state = be.getBlockState();
+        Direction facing = state.hasProperty(DirectionalBlock.FACING)
+                ? state.getValue(DirectionalBlock.FACING)
+                : Direction.SOUTH;
+        return JOMLConversion.atLowerCornerOf(facing.getNormal());
+    }
+
+    /** Block facing transformed into world space via the containing sub-level pose. */
+    private static Vector3d worldFacingOf(BlockEntity be) {
+        Vector3d local = localFacingOf(be);
+        SubLevelAccess containing = Sable.HELPER.getContaining(be);
+        if (containing instanceof SubLevel subLevel)
+            return subLevel.logicalPose().transformNormal(local, new Vector3d());
+        return local;
+    }
+
+    /**
+     * Orthonormal basis with +Z along {@code forward}. If {@code forward} is parallel
+     * to the preferred up axis, falls back to another reference so the basis stays a
+     * well-defined line frame instead of collapsing.
+     */
+    private static Quaterniond basisFromForward(Vector3dc forward) {
+        Vector3d z = new Vector3d(forward);
+        if (z.lengthSquared() < 1.0e-12)
+            return new Quaterniond();
+        z.normalize();
+
+        Vector3d ref = Math.abs(z.y) > PARALLEL_DOT
+                ? new Vector3d(1.0, 0.0, 0.0)
+                : new Vector3d(0.0, 1.0, 0.0);
+        Vector3d x = new Vector3d();
+        ref.cross(z, x);
+        if (x.lengthSquared() < 1.0e-12) {
+            ref.set(0.0, 0.0, 1.0);
+            ref.cross(z, x);
+        }
+        x.normalize();
+        Vector3d y = z.cross(x, new Vector3d()).normalize();
+        return new Quaterniond().setFromNormalized(new Matrix3d().set(x, y, z));
     }
 
     private void removeConstraint() {
@@ -585,6 +661,6 @@ public class DeployerHoldController {
             constraintHandle = null;
         }
         lastConstraintHandlePos = null;
-        hasLastWorldGoal = false;
+        hasLastConstraintPose = false;
     }
 }

@@ -32,9 +32,12 @@ Wrench cycle: **Use → Grip: Pull → Grip: Hitch → Attack → Use**.
 ## Build
 
 ```bash
+./gradlew test
 ./gradlew build
 ./gradlew runClient
 ```
+
+CI on `main` and pull requests runs resource validation, unit tests, a full Gradle build, and jar contents checks.
 
 ## License
 

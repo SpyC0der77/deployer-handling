@@ -251,11 +251,8 @@ public abstract class DeployerBlockEntityMixin extends KineticBlockEntity
         deployerhold$controller().write(compound, registries);
     }
 
-    @Inject(method = "writeSafe", at = @At("RETURN"), remap = false)
-    private void deployerhold$writeHoldSafe(CompoundTag compound, HolderLookup.Provider registries, CallbackInfo ci) {
-        // Schematics / some plot paths use writeSafe (Mode only) — still persist the latch.
-        deployerhold$controller().write(compound, registries);
-    }
+    // Intentionally no writeSafe inject: schematics/placement must not copy live
+    // latch NBT (holding + handle pos), or placed deployers get a phantom pendingRestore.
 
     @Inject(method = "read", at = @At("HEAD"), remap = false)
     private void deployerhold$migrateLegacyHoldMode(CompoundTag compound, HolderLookup.Provider registries, boolean clientPacket, CallbackInfo ci) {

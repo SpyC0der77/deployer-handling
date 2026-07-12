@@ -38,6 +38,8 @@ import org.joml.Quaterniond;
 import org.joml.Vector3d;
 import org.joml.Vector3dc;
 
+import java.util.UUID;
+
 /**
  * Runtime grip-session state for a Deployer in Grip: Pull / Grip: Hitch.
  * <p>
@@ -65,6 +67,8 @@ public class DeployerHoldController {
     private @Nullable BlockPos heldHandlePos;
     /** True when the latched handle lived in a Sable sub-level (plot-local BlockPos). */
     private boolean heldHandleWasInSubLevel;
+    /** Sub-level UUID of the latched handle, when it lived in a plot. */
+    private @Nullable UUID heldHandleSubLevelId;
     private boolean holding;
     /**
      * True after NBT load until the saved handle BlockPos is resolved again.
@@ -145,6 +149,7 @@ public class DeployerHoldController {
         heldHandle = null;
         heldHandlePos = null;
         heldHandleWasInSubLevel = false;
+        heldHandleSubLevelId = null;
         physicsPathActive = false;
         lastConstraintHandlePos = null;
         hasLastConstraintPose = false;
@@ -184,9 +189,14 @@ public class DeployerHoldController {
                     heldHandlePos.getX(), heldHandlePos.getY(), heldHandlePos.getZ()
             });
             tag.putBoolean("DeployerHoldHandleSubLevel", heldHandleWasInSubLevel);
+            if (heldHandleSubLevelId != null)
+                tag.putUUID("DeployerHoldHandleSubLevelId", heldHandleSubLevelId);
+            else
+                tag.remove("DeployerHoldHandleSubLevelId");
         } else {
             tag.remove("DeployerHoldHandle");
             tag.remove("DeployerHoldHandleSubLevel");
+            tag.remove("DeployerHoldHandleSubLevelId");
         }
     }
 
@@ -198,6 +208,9 @@ public class DeployerHoldController {
         holding = tag.getBoolean("DeployerHoldHolding");
         heldHandlePos = readHandlePos(tag);
         heldHandleWasInSubLevel = tag.getBoolean("DeployerHoldHandleSubLevel");
+        heldHandleSubLevelId = tag.hasUUID("DeployerHoldHandleSubLevelId")
+                ? tag.getUUID("DeployerHoldHandleSubLevelId")
+                : null;
         heldHandle = null;
         removeConstraint();
         physicsPathActive = false;
@@ -248,11 +261,14 @@ public class DeployerHoldController {
 
         HandleBlockEntity handle = resolveHeldHandle();
         if (handle == null) {
-            // Saved latch: keep waiting until the handle's chunk/plot is ready.
-            // Do not auto-drop on rejoin — plot-local coords often look like empty
-            // overworld blocks and would falsely "confirm missing".
-            if (pendingRestore)
+            // Saved latch: wait while the handle's chunk/plot may still be loading.
+            // Drop only once the target is loaded and confirmed empty (not on rejoin
+            // when plot-local coords would look like empty overworld blocks).
+            if (pendingRestore) {
+                if (isHeldHandleConfirmedMissing(level))
+                    releaseAndParkArm();
                 return;
+            }
             releaseAndParkArm();
             return;
         }
@@ -450,7 +466,9 @@ public class DeployerHoldController {
 
         heldHandle = handle;
         heldHandlePos = handle.getBlockPos().immutable();
-        heldHandleWasInSubLevel = Sable.HELPER.getContaining(handle) instanceof SubLevel;
+        SubLevelAccess handleContaining = Sable.HELPER.getContaining(handle);
+        heldHandleWasInSubLevel = handleContaining instanceof SubLevel;
+        heldHandleSubLevelId = handleContaining != null ? handleContaining.getUniqueId() : null;
         holding = true;
         pendingRestore = false;
         physicsPathActive = false;
@@ -494,12 +512,55 @@ public class DeployerHoldController {
     }
 
     /**
+     * True when the saved latch target is loaded and no longer a handle.
+     * Returns false while the chunk / sub-level may still be loading.
+     */
+    private boolean isHeldHandleConfirmedMissing(Level level) {
+        if (heldHandlePos == null)
+            return true;
+
+        if (heldHandleWasInSubLevel) {
+            if (heldHandleSubLevelId == null)
+                return false; // legacy NBT: cannot scope which plot is "loaded"
+            SubLevelContainer container = SubLevelContainer.getContainer(level);
+            if (container == null)
+                return false;
+            SubLevel subLevel = container.getSubLevel(heldHandleSubLevelId);
+            if (subLevel == null)
+                return false; // plot not registered yet
+            if (subLevel.isRemoved())
+                return true; // assembly torn down
+            return findHandleInSubLevel(subLevel, heldHandlePos) == null;
+        }
+
+        if (!level.isLoaded(heldHandlePos))
+            return false;
+        return !(level.getBlockEntity(heldHandlePos) instanceof HandleBlockEntity);
+    }
+
+    /**
      * Resolve a specific handle by its block position (plot-local or overworld).
      * One sub-level may contain many handles — position selects which one.
+     * Saved sub-level handles skip the overworld lookup so plot-local coords
+     * cannot latch onto a coincidental overworld HandleBlockEntity.
      */
-    private static @Nullable HandleBlockEntity findHandleAt(@Nullable Level level, BlockPos pos) {
+    private @Nullable HandleBlockEntity findHandleAt(@Nullable Level level, BlockPos pos) {
         if (level == null)
             return null;
+
+        if (heldHandleWasInSubLevel) {
+            if (heldHandleSubLevelId != null) {
+                SubLevelContainer container = SubLevelContainer.getContainer(level);
+                if (container == null)
+                    return null;
+                SubLevel subLevel = container.getSubLevel(heldHandleSubLevelId);
+                if (subLevel == null || subLevel.isRemoved())
+                    return null;
+                return findHandleInSubLevel(subLevel, pos);
+            }
+            // Legacy saves without UUID: scan every loaded plot, never overworld.
+            return findHandleInAnySubLevel(level, pos);
+        }
 
         // Overworld handle (when that chunk is loaded).
         if (level.isLoaded(pos)) {
@@ -508,15 +569,18 @@ public class DeployerHoldController {
                 return handle;
         }
 
-        // Always scan sub-levels. Plot-local positions are not reliably detected by
-        // isInPlotGrid alone, and missing that check was wiping latches on rejoin.
+        // Legacy / ambiguous: also scan sub-levels (flag false or missing).
+        return findHandleInAnySubLevel(level, pos);
+    }
+
+    private static @Nullable HandleBlockEntity findHandleInAnySubLevel(Level level, BlockPos pos) {
         SubLevelContainer container = SubLevelContainer.getContainer(level);
-        if (container != null) {
-            for (SubLevel subLevel : container.getAllSubLevels()) {
-                HandleBlockEntity found = findHandleInSubLevel(subLevel, pos);
-                if (found != null)
-                    return found;
-            }
+        if (container == null)
+            return null;
+        for (SubLevel subLevel : container.getAllSubLevels()) {
+            HandleBlockEntity found = findHandleInSubLevel(subLevel, pos);
+            if (found != null)
+                return found;
         }
         return null;
     }

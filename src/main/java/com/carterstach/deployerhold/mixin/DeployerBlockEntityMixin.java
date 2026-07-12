@@ -147,21 +147,10 @@ public abstract class DeployerBlockEntityMixin extends KineticBlockEntity
         ci.cancel();
     }
 
-    /** While latched, stay retracted — don't start another extend cycle. */
-    @Inject(method = "start", at = @At("HEAD"), cancellable = true, remap = false)
-    private void deployerhold$blockStartWhileHolding(CallbackInfo ci) {
-        if (!DeployerHoldModes.isGrip(DeployerFields.getMode(deployerhold$self())))
-            return;
-        if (!deployerhold$controller().isHolding())
-            return;
-
-        timer = DeployerFields.getTimerSpeed(deployerhold$self()) * 10;
-        ci.cancel();
-    }
-
     /**
-     * While holding: redstone ungrips; otherwise keep the constraint in sync.
-     * Does not cancel Create's expand/retract so the arm can pull back after latching.
+     * While latched: sync the constraint, and park retracted by cancelling the rest of
+     * Create's tick so it cannot call {@code start()} again.
+     * Redstone ungrips and restores a normal WAITING arm so the next unpowered tick can extend.
      */
     @Inject(
             method = "tick",
@@ -171,6 +160,7 @@ public abstract class DeployerBlockEntityMixin extends KineticBlockEntity
                     shift = At.Shift.AFTER,
                     remap = false
             ),
+            cancellable = true,
             remap = false
     )
     private void deployerhold$tickWhileHolding(CallbackInfo ci) {
@@ -181,15 +171,36 @@ public abstract class DeployerBlockEntityMixin extends KineticBlockEntity
             return;
 
         if (redstoneLocked) {
-            deployerhold$controller().release();
-            DeployerFields.setState(self, DeployerFields.stateNamed(self, "WAITING"));
-            timer = 500;
-            self.setChanged();
-            self.sendData();
+            deployerhold$resetArmAfterRelease(self);
+            ci.cancel();
             return;
         }
 
         deployerhold$controller().tickHold();
+        // Still latched — keep Create from starting another expand cycle.
+        if (!deployerhold$controller().isHolding())
+            return;
+
+        Object state = DeployerFields.getState(self);
+        String name = state instanceof Enum<?> e ? e.name() : String.valueOf(state);
+        // Let expand→activate and retract finish so pull tracks the tip drawing back.
+        if ("EXPANDING".equals(name) || "RETRACTING".equals(name))
+            return;
+
+        DeployerFields.setState(self, DeployerFields.stateNamed(self, "WAITING"));
+        int speed = DeployerFields.getTimerSpeed(self);
+        timer = Math.max(speed, 1) * 10;
+        ci.cancel();
+    }
+
+    @Unique
+    private void deployerhold$resetArmAfterRelease(DeployerBlockEntity self) {
+        deployerhold$controller().release();
+        DeployerFields.setState(self, DeployerFields.stateNamed(self, "WAITING"));
+        // Ready to extend as soon as redstone unlocks and Create's tick runs again.
+        timer = 0;
+        self.setChanged();
+        self.sendData();
     }
 
     @OnlyIn(Dist.CLIENT)
@@ -235,10 +246,13 @@ public abstract class DeployerBlockEntityMixin extends KineticBlockEntity
         cir.setReturnValue(true);
     }
 
-    @Inject(method = "write", at = @At("TAIL"), remap = false)
+    @Inject(method = "write", at = @At("RETURN"), remap = false)
     private void deployerhold$writeHold(CompoundTag compound, HolderLookup.Provider registries, boolean clientPacket, CallbackInfo ci) {
         deployerhold$controller().write(compound, registries);
     }
+
+    // Intentionally no writeSafe inject: schematics/placement must not copy live
+    // latch NBT (holding + handle pos), or placed deployers get a phantom pendingRestore.
 
     @Inject(method = "read", at = @At("HEAD"), remap = false)
     private void deployerhold$migrateLegacyHoldMode(CompoundTag compound, HolderLookup.Provider registries, boolean clientPacket, CallbackInfo ci) {
@@ -247,15 +261,23 @@ public abstract class DeployerBlockEntityMixin extends KineticBlockEntity
             compound.putString("Mode", "HOLD_PULL");
     }
 
-    @Inject(method = "read", at = @At("TAIL"), remap = false)
+    /**
+     * Must use RETURN (every exit), not TAIL. Create's disk load path
+     * ({@code clientPacket == false}) returns early after {@code super.read},
+     * and TAIL only hooks the final client-packet return — so latch NBT was
+     * written on save but never applied on world load (goggles stayed Open).
+     */
+    @Inject(method = "read", at = @At("RETURN"), remap = false)
     private void deployerhold$readHold(CompoundTag compound, HolderLookup.Provider registries, boolean clientPacket, CallbackInfo ci) {
         deployerhold$controller().read(compound, registries);
     }
 
     @Inject(method = "invalidate", at = @At("HEAD"))
     private void deployerhold$invalidate(CallbackInfo ci) {
+        // Only detach the live joint — do not clear holding/handle pos, or chunk
+        // unload would wipe the latch from the next save and break leave/rejoin.
         if (deployerhold$controller != null)
-            deployerhold$controller.clear();
+            deployerhold$controller.detachConstraint();
     }
 
     @Override

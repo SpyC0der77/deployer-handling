@@ -38,11 +38,14 @@ import org.joml.Quaterniond;
 import org.joml.Vector3d;
 import org.joml.Vector3dc;
 
+import java.util.UUID;
+
 /**
  * Runtime grip-session state for a Deployer in Grip: Pull / Grip: Hitch.
  * <p>
  * Lifecycle: extend → latch handle → retract while constrained → stay latched
- * until redstone powers the deployer (ungrip).
+ * until redstone powers the deployer (ungrip). Latch identity is the handle's
+ * {@link BlockPos} (plot-local or overworld) and survives leave/rejoin.
  * <ul>
  *   <li>Pull: handle's sub-level is pulled toward the moving tip</li>
  *   <li>Hitch: deployer's sub-level is pulled toward the handle</li>
@@ -60,8 +63,18 @@ public class DeployerHoldController {
     private final DeployerHoldAccess access;
 
     private @Nullable HandleBlockEntity heldHandle;
+    /** Exact handle block position (plot-local or overworld) — not a sub-level id. */
     private @Nullable BlockPos heldHandlePos;
+    /** True when the latched handle lived in a Sable sub-level (plot-local BlockPos). */
+    private boolean heldHandleWasInSubLevel;
+    /** Sub-level UUID of the latched handle, when it lived in a plot. */
+    private @Nullable UUID heldHandleSubLevelId;
     private boolean holding;
+    /**
+     * True after NBT load until the saved handle BlockPos is resolved again.
+     * Keeps latch status across leave/rejoin while sub-levels finish loading.
+     */
+    private boolean pendingRestore;
     private @Nullable PhysicsConstraintHandle constraintHandle;
     /** True once Sable has called this Deployer's physics tick for the active grip. */
     private boolean physicsPathActive;
@@ -129,13 +142,32 @@ public class DeployerHoldController {
     }
 
     public void clear() {
-        removeConstraint();
+        // Clear latch flags before removing the joint so a remove() failure
+        // cannot leave holding=true and permanently block arm extension.
         holding = false;
+        pendingRestore = false;
         heldHandle = null;
         heldHandlePos = null;
+        heldHandleWasInSubLevel = false;
+        heldHandleSubLevelId = null;
         physicsPathActive = false;
         lastConstraintHandlePos = null;
         hasLastConstraintPose = false;
+        removeConstraint();
+    }
+
+    /**
+     * Drop the live physics joint only. Keeps {@code holding} / {@code heldHandlePos}
+     * so chunk unload + world save still persist the latch for leave/rejoin.
+     */
+    public void detachConstraint() {
+        heldHandle = null;
+        physicsPathActive = false;
+        lastConstraintHandlePos = null;
+        hasLastConstraintPose = false;
+        removeConstraint();
+        if (holding && heldHandlePos != null)
+            pendingRestore = true;
     }
 
     public void release() {
@@ -144,25 +176,65 @@ public class DeployerHoldController {
 
     public void onModeChanged() {
         clear();
+        access.deployerhold$setState(stateNamed("WAITING"));
+        access.deployerhold$setTimer(0);
+        deployer.sendData();
+        deployer.setChanged();
     }
 
     public void write(CompoundTag tag, HolderLookup.Provider registries) {
         tag.putBoolean("DeployerHoldHolding", holding);
-        if (heldHandlePos != null)
-            tag.put("DeployerHoldHandle", NbtUtils.writeBlockPos(heldHandlePos));
+        if (heldHandlePos != null) {
+            tag.putIntArray("DeployerHoldHandle", new int[]{
+                    heldHandlePos.getX(), heldHandlePos.getY(), heldHandlePos.getZ()
+            });
+            tag.putBoolean("DeployerHoldHandleSubLevel", heldHandleWasInSubLevel);
+            if (heldHandleSubLevelId != null)
+                tag.putUUID("DeployerHoldHandleSubLevelId", heldHandleSubLevelId);
+            else
+                tag.remove("DeployerHoldHandleSubLevelId");
+        } else {
+            tag.remove("DeployerHoldHandle");
+            tag.remove("DeployerHoldHandleSubLevel");
+            tag.remove("DeployerHoldHandleSubLevelId");
+        }
     }
 
     public void read(CompoundTag tag, HolderLookup.Provider registries) {
+        // Partial client sync packets without our keys must not wipe a live latch.
+        if (!tag.contains("DeployerHoldHolding"))
+            return;
+
         holding = tag.getBoolean("DeployerHoldHolding");
-        heldHandlePos = tag.contains("DeployerHoldHandle")
-                ? NbtUtils.readBlockPos(tag, "DeployerHoldHandle").orElse(null)
+        heldHandlePos = readHandlePos(tag);
+        heldHandleWasInSubLevel = tag.getBoolean("DeployerHoldHandleSubLevel");
+        heldHandleSubLevelId = tag.hasUUID("DeployerHoldHandleSubLevelId")
+                ? tag.getUUID("DeployerHoldHandleSubLevelId")
                 : null;
         heldHandle = null;
         removeConstraint();
         physicsPathActive = false;
-        // Sub-level handles can't be restored from a bare BlockPos; re-latch on next extend.
-        if (holding && resolveHeldHandle() == null)
+        // Keep the latch across leave/rejoin. Resolve by handle BlockPos once the
+        // target chunk / sub-level plot is loaded — never key by sub-level id alone
+        // (one sub-level can hold many handles).
+        if (holding && heldHandlePos == null) {
             clear();
+            return;
+        }
+        pendingRestore = holding;
+        if (holding)
+            resolveHeldHandle();
+    }
+
+    private static @Nullable BlockPos readHandlePos(CompoundTag tag) {
+        if (!tag.contains("DeployerHoldHandle"))
+            return null;
+        // Current format: int[3]
+        int[] coords = tag.getIntArray("DeployerHoldHandle");
+        if (coords.length == 3)
+            return new BlockPos(coords[0], coords[1], coords[2]);
+        // Legacy: NbtUtils BlockPos tag
+        return NbtUtils.readBlockPos(tag, "DeployerHoldHandle").orElse(null);
     }
 
     /**
@@ -183,12 +255,39 @@ public class DeployerHoldController {
         if (!holding)
             return;
 
-        if (!maintainHold()) {
-            release();
-            access.deployerhold$setState(stateNamed("WAITING"));
-            access.deployerhold$setTimer(500);
-            deployer.sendData();
-            deployer.setChanged();
+        Level level = deployer.getLevel();
+        if (level == null || level.isClientSide)
+            return;
+
+        HandleBlockEntity handle = resolveHeldHandle();
+        if (handle == null) {
+            // Saved latch: wait while the handle's chunk/plot may still be loading.
+            // Drop only once the target is loaded and confirmed empty (not on rejoin
+            // when plot-local coords would look like empty overworld blocks).
+            if (pendingRestore) {
+                if (isHeldHandleConfirmedMissing(level))
+                    releaseAndParkArm();
+                return;
+            }
+            releaseAndParkArm();
+            return;
+        }
+
+        // Rejoin: reconnect the joint as soon as the handle exists. Skip holdRange
+        // until the constraint is back — poses/distances are unreliable during load,
+        // and drifted bodies must be yanked back rather than auto-dropped.
+        if (pendingRestore) {
+            physicsPathActive = false;
+            updateConstraintFromGameTick();
+            if (constraintHandle != null && constraintHandle.isValid()) {
+                pendingRestore = false;
+                deployer.sendData();
+            }
+            return;
+        }
+
+        if (!maintainHold(handle)) {
+            releaseAndParkArm();
             return;
         }
 
@@ -196,11 +295,23 @@ public class DeployerHoldController {
             updateConstraintFromGameTick();
     }
 
+    /** Drop the latch and leave the arm in a startable WAITING state. */
+    private void releaseAndParkArm() {
+        release();
+        access.deployerhold$setState(stateNamed("WAITING"));
+        access.deployerhold$setTimer(0);
+        deployer.sendData();
+        deployer.setChanged();
+    }
+
     public void physicsTick(ServerSubLevel deployerSubLevel) {
         if (!holding)
             return;
-        physicsPathActive = true;
         updateConstraint(deployerSubLevel);
+        // Only suppress the game-tick fallback once a live joint exists. A failed
+        // rebuild during load must not permanently disable reconnect attempts.
+        if (constraintHandle != null && constraintHandle.isValid())
+            physicsPathActive = true;
     }
 
     private void updateConstraintFromGameTick() {
@@ -228,13 +339,15 @@ public class DeployerHoldController {
 
         HandleBlockEntity handle = resolveHeldHandle();
         if (handle == null) {
-            release();
+            if (!pendingRestore)
+                release();
             return;
         }
 
         SubLevelAccess handleAccess = Sable.HELPER.getContaining(handle);
         if (!(handleAccess instanceof ServerSubLevel handleServerSubLevel)) {
-            release();
+            if (!pendingRestore)
+                release();
             return;
         }
 
@@ -254,7 +367,8 @@ public class DeployerHoldController {
 
         HandleBlockEntity handle = resolveHeldHandle();
         if (handle == null) {
-            release();
+            if (!pendingRestore)
+                release();
             return;
         }
 
@@ -307,25 +421,28 @@ public class DeployerHoldController {
         rebuildConstraint(deployerSubLevel, handleServerSubLevel, hitch, handle, grip, grab, worldGoal);
     }
 
-    private boolean maintainHold() {
-        HandleBlockEntity handle = resolveHeldHandle();
-        if (handle == null)
-            return false;
-
+    private boolean maintainHold(HandleBlockEntity handle) {
         Level level = deployer.getLevel();
         if (level == null)
             return false;
 
         SubLevelAccess deployerSubLevel = Sable.HELPER.getContaining(deployer);
         SubLevelAccess handleSubLevel = Sable.HELPER.getContaining(handle);
-        if (deployerSubLevel == handleSubLevel)
+        // Only drop when we know both sides and they're the same. During load,
+        // getContaining can be null briefly — that must not clear a saved latch.
+        if (deployerSubLevel != null && deployerSubLevel == handleSubLevel)
             return false;
 
         Vector3d grip = getDeployerGripPoint();
         Vector3d grab = handle.getGrabCenter();
         double distanceSq = Sable.HELPER.distanceSquaredWithSubLevels(level, grip, grab);
         double holdRange = DeployerHoldConfig.holdRange();
-        return distanceSq <= holdRange * holdRange;
+        if (distanceSq <= holdRange * holdRange)
+            return true;
+
+        // Out of range but still constrained: keep the latch so the joint can
+        // pull bodies back after leave/rejoin drift instead of dropping to Open.
+        return constraintHandle != null && constraintHandle.isValid();
     }
 
     private void tryGrabAtExtension() {
@@ -337,7 +454,7 @@ public class DeployerHoldController {
 
         SubLevelAccess deployerSubLevel = Sable.HELPER.getContaining(deployer);
         SubLevelAccess handleSubLevel = Sable.HELPER.getContaining(handle);
-        if (deployerSubLevel == handleSubLevel) {
+        if (deployerSubLevel != null && deployerSubLevel == handleSubLevel) {
             failGrab();
             return;
         }
@@ -349,7 +466,11 @@ public class DeployerHoldController {
 
         heldHandle = handle;
         heldHandlePos = handle.getBlockPos().immutable();
+        SubLevelAccess handleContaining = Sable.HELPER.getContaining(handle);
+        heldHandleWasInSubLevel = handleContaining instanceof SubLevel;
+        heldHandleSubLevelId = handleContaining != null ? handleContaining.getUniqueId() : null;
         holding = true;
+        pendingRestore = false;
         physicsPathActive = false;
         updateConstraintFromGameTick();
         deployer.sendData();
@@ -377,21 +498,101 @@ public class DeployerHoldController {
         if (heldHandlePos == null)
             return null;
 
-        Level level = deployer.getLevel();
+        HandleBlockEntity found = findHandleAt(deployer.getLevel(), heldHandlePos);
+        if (found == null)
+            return null;
+
+        // During restore, accept the saved handle even if containing sub-levels
+        // are not queryable yet (both null would fail a strict != check).
+        if (pendingRestore || isCrossSubLevelTarget(deployer, found)) {
+            heldHandle = found;
+            return found;
+        }
+        return null;
+    }
+
+    /**
+     * True when the saved latch target is loaded and no longer a handle.
+     * Returns false while the chunk / sub-level may still be loading.
+     */
+    private boolean isHeldHandleConfirmedMissing(Level level) {
+        if (heldHandlePos == null)
+            return true;
+
+        if (heldHandleWasInSubLevel) {
+            if (heldHandleSubLevelId == null)
+                return false; // legacy NBT: cannot scope which plot is "loaded"
+            SubLevelContainer container = SubLevelContainer.getContainer(level);
+            if (container == null)
+                return false;
+            SubLevel subLevel = container.getSubLevel(heldHandleSubLevelId);
+            if (subLevel == null)
+                return false; // plot not registered yet
+            if (subLevel.isRemoved())
+                return true; // assembly torn down
+            return findHandleInSubLevel(subLevel, heldHandlePos) == null;
+        }
+
+        if (!level.isLoaded(heldHandlePos))
+            return false;
+        return !(level.getBlockEntity(heldHandlePos) instanceof HandleBlockEntity);
+    }
+
+    /**
+     * Resolve a specific handle by its block position (plot-local or overworld).
+     * One sub-level may contain many handles — position selects which one.
+     * Saved sub-level handles skip the overworld lookup so plot-local coords
+     * cannot latch onto a coincidental overworld HandleBlockEntity.
+     */
+    private @Nullable HandleBlockEntity findHandleAt(@Nullable Level level, BlockPos pos) {
         if (level == null)
             return null;
 
-        BlockEntity be = level.getBlockEntity(heldHandlePos);
-        if (be instanceof HandleBlockEntity handle && isCrossSubLevelTarget(deployer, handle)) {
-            heldHandle = handle;
-            return handle;
+        if (heldHandleWasInSubLevel) {
+            if (heldHandleSubLevelId != null) {
+                SubLevelContainer container = SubLevelContainer.getContainer(level);
+                if (container == null)
+                    return null;
+                SubLevel subLevel = container.getSubLevel(heldHandleSubLevelId);
+                if (subLevel == null || subLevel.isRemoved())
+                    return null;
+                return findHandleInSubLevel(subLevel, pos);
+            }
+            // Legacy saves without UUID: scan every loaded plot, never overworld.
+            return findHandleInAnySubLevel(level, pos);
         }
 
-        // Sub-level handle: rediscover near the tip.
-        HandleBlockEntity found = findHandleAhead(deployer);
-        if (found != null && found.getBlockPos().equals(heldHandlePos)) {
-            heldHandle = found;
-            return found;
+        // Overworld handle (when that chunk is loaded).
+        if (level.isLoaded(pos)) {
+            BlockEntity be = level.getBlockEntity(pos);
+            if (be instanceof HandleBlockEntity handle)
+                return handle;
+        }
+
+        // Legacy / ambiguous: also scan sub-levels (flag false or missing).
+        return findHandleInAnySubLevel(level, pos);
+    }
+
+    private static @Nullable HandleBlockEntity findHandleInAnySubLevel(Level level, BlockPos pos) {
+        SubLevelContainer container = SubLevelContainer.getContainer(level);
+        if (container == null)
+            return null;
+        for (SubLevel subLevel : container.getAllSubLevels()) {
+            HandleBlockEntity found = findHandleInSubLevel(subLevel, pos);
+            if (found != null)
+                return found;
+        }
+        return null;
+    }
+
+    private static @Nullable HandleBlockEntity findHandleInSubLevel(SubLevel subLevel, BlockPos pos) {
+        BlockEntity embedded = subLevel.getPlot().getEmbeddedLevelAccessor().getBlockEntity(pos);
+        if (embedded instanceof HandleBlockEntity handle)
+            return handle;
+
+        for (BlockEntitySubLevelActor actor : subLevel.getPlot().getBlockEntityActors()) {
+            if (actor instanceof HandleBlockEntity handle && handle.getBlockPos().equals(pos))
+                return handle;
         }
         return null;
     }
@@ -516,7 +717,12 @@ public class DeployerHoldController {
     }
 
     private static boolean isCrossSubLevelTarget(DeployerBlockEntity deployer, HandleBlockEntity handle) {
-        return Sable.HELPER.getContaining(deployer) != Sable.HELPER.getContaining(handle);
+        SubLevelAccess deployerSubLevel = Sable.HELPER.getContaining(deployer);
+        SubLevelAccess handleSubLevel = Sable.HELPER.getContaining(handle);
+        // Both unknown: not enough info to reject (restore path uses pendingRestore).
+        if (deployerSubLevel == null && handleSubLevel == null)
+            return false;
+        return deployerSubLevel != handleSubLevel;
     }
 
     /**

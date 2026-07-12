@@ -40,3 +40,5 @@ Thumbs.db
 /assets/
 /data/
 /META-INF/
+.tmp*
+.vscode

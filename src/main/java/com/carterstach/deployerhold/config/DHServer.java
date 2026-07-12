@@ -7,7 +7,7 @@ import net.createmod.catnip.config.ConfigBase;
  */
 public class DHServer extends ConfigBase {
     public final ConfigGroup grab = group(0, "grab", Comments.grab);
-    public final ConfigFloat grabTolerance = f(2.75f, 0.25f, 8.0f, "grabTolerance",
+    public final ConfigFloat grabTolerance = f(0.75f, 0.25f, 8.0f, "grabTolerance",
             Comments.grabTolerance);
     public final ConfigFloat holdRange = f(5.0f, 1.0f, 16.0f, "holdRange",
             Comments.holdRange);

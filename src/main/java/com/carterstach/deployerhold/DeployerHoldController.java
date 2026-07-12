@@ -42,7 +42,8 @@ import org.joml.Vector3dc;
  * Runtime grip-session state for a Deployer in Grip: Pull / Grip: Hitch.
  * <p>
  * Lifecycle: extend → latch handle → retract while constrained → stay latched
- * until redstone powers the deployer (ungrip).
+ * until redstone powers the deployer (ungrip). Latch identity is the handle's
+ * {@link BlockPos} (plot-local or overworld) and survives leave/rejoin.
  * <ul>
  *   <li>Pull: handle's sub-level is pulled toward the moving tip</li>
  *   <li>Hitch: deployer's sub-level is pulled toward the handle</li>
@@ -60,8 +61,14 @@ public class DeployerHoldController {
     private final DeployerHoldAccess access;
 
     private @Nullable HandleBlockEntity heldHandle;
+    /** Exact handle block position (plot-local or overworld) — not a sub-level id. */
     private @Nullable BlockPos heldHandlePos;
     private boolean holding;
+    /**
+     * True after NBT load until the saved handle BlockPos is resolved again.
+     * Keeps latch status across leave/rejoin while sub-levels finish loading.
+     */
+    private boolean pendingRestore;
     private @Nullable PhysicsConstraintHandle constraintHandle;
     /** True once Sable has called this Deployer's physics tick for the active grip. */
     private boolean physicsPathActive;
@@ -131,6 +138,7 @@ public class DeployerHoldController {
     public void clear() {
         removeConstraint();
         holding = false;
+        pendingRestore = false;
         heldHandle = null;
         heldHandlePos = null;
         physicsPathActive = false;
@@ -160,9 +168,16 @@ public class DeployerHoldController {
         heldHandle = null;
         removeConstraint();
         physicsPathActive = false;
-        // Sub-level handles can't be restored from a bare BlockPos; re-latch on next extend.
-        if (holding && resolveHeldHandle() == null)
+        // Keep the latch across leave/rejoin. Resolve by handle BlockPos once the
+        // target chunk / sub-level plot is loaded — never key by sub-level id alone
+        // (one sub-level can hold many handles).
+        if (holding && heldHandlePos == null) {
             clear();
+            return;
+        }
+        pendingRestore = holding;
+        if (holding)
+            resolveHeldHandle();
     }
 
     /**
@@ -183,7 +198,25 @@ public class DeployerHoldController {
         if (!holding)
             return;
 
-        if (!maintainHold()) {
+        Level level = deployer.getLevel();
+        if (level == null || level.isClientSide)
+            return;
+
+        HandleBlockEntity handle = resolveHeldHandle();
+        if (handle == null) {
+            // After reload, wait until the saved handle BlockPos is loadable again.
+            if (pendingRestore && !isHeldHandleConfirmedMissing())
+                return;
+            release();
+            access.deployerhold$setState(stateNamed("WAITING"));
+            access.deployerhold$setTimer(500);
+            deployer.sendData();
+            deployer.setChanged();
+            return;
+        }
+        pendingRestore = false;
+
+        if (!maintainHold(handle)) {
             release();
             access.deployerhold$setState(stateNamed("WAITING"));
             access.deployerhold$setTimer(500);
@@ -228,13 +261,15 @@ public class DeployerHoldController {
 
         HandleBlockEntity handle = resolveHeldHandle();
         if (handle == null) {
-            release();
+            if (!pendingRestore)
+                release();
             return;
         }
 
         SubLevelAccess handleAccess = Sable.HELPER.getContaining(handle);
         if (!(handleAccess instanceof ServerSubLevel handleServerSubLevel)) {
-            release();
+            if (!pendingRestore)
+                release();
             return;
         }
 
@@ -254,7 +289,8 @@ public class DeployerHoldController {
 
         HandleBlockEntity handle = resolveHeldHandle();
         if (handle == null) {
-            release();
+            if (!pendingRestore)
+                release();
             return;
         }
 
@@ -307,11 +343,7 @@ public class DeployerHoldController {
         rebuildConstraint(deployerSubLevel, handleServerSubLevel, hitch, handle, grip, grab, worldGoal);
     }
 
-    private boolean maintainHold() {
-        HandleBlockEntity handle = resolveHeldHandle();
-        if (handle == null)
-            return false;
-
+    private boolean maintainHold(HandleBlockEntity handle) {
         Level level = deployer.getLevel();
         if (level == null)
             return false;
@@ -350,6 +382,7 @@ public class DeployerHoldController {
         heldHandle = handle;
         heldHandlePos = handle.getBlockPos().immutable();
         holding = true;
+        pendingRestore = false;
         physicsPathActive = false;
         updateConstraintFromGameTick();
         deployer.sendData();
@@ -377,21 +410,78 @@ public class DeployerHoldController {
         if (heldHandlePos == null)
             return null;
 
+        HandleBlockEntity found = findHandleAt(deployer.getLevel(), heldHandlePos);
+        if (found != null && isCrossSubLevelTarget(deployer, found)) {
+            heldHandle = found;
+            return found;
+        }
+        return null;
+    }
+
+    /**
+     * True when the chunk / plot that should contain {@link #heldHandlePos} is loaded
+     * but no handle exists there — the latch target is gone, not merely unloaded.
+     */
+    private boolean isHeldHandleConfirmedMissing() {
+        if (heldHandlePos == null)
+            return true;
+
         Level level = deployer.getLevel();
+        if (level == null)
+            return false;
+
+        if (Sable.HELPER.isInPlotGrid(level, heldHandlePos.getX(), heldHandlePos.getZ())) {
+            SubLevelAccess containing = Sable.HELPER.getContaining(level, heldHandlePos);
+            if (!(containing instanceof SubLevel subLevel))
+                return false; // plot coords, but that sub-level isn't loaded yet
+            return findHandleInSubLevel(subLevel, heldHandlePos) == null;
+        }
+
+        if (!level.isLoaded(heldHandlePos))
+            return false;
+        BlockEntity be = level.getBlockEntity(heldHandlePos);
+        return !(be instanceof HandleBlockEntity);
+    }
+
+    /**
+     * Resolve a specific handle by its block position (plot-local or overworld).
+     * One sub-level may contain many handles — position selects which one.
+     */
+    private static @Nullable HandleBlockEntity findHandleAt(@Nullable Level level, BlockPos pos) {
         if (level == null)
             return null;
 
-        BlockEntity be = level.getBlockEntity(heldHandlePos);
-        if (be instanceof HandleBlockEntity handle && isCrossSubLevelTarget(deployer, handle)) {
-            heldHandle = handle;
-            return handle;
+        if (Sable.HELPER.isInPlotGrid(level, pos.getX(), pos.getZ())) {
+            SubLevelAccess containing = Sable.HELPER.getContaining(level, pos);
+            if (containing instanceof SubLevel subLevel) {
+                HandleBlockEntity inPlot = findHandleInSubLevel(subLevel, pos);
+                if (inPlot != null)
+                    return inPlot;
+            }
+            // Fallback: scan loaded sub-levels for this exact handle BlockPos.
+            SubLevelContainer container = SubLevelContainer.getContainer(level);
+            if (container != null) {
+                for (SubLevel subLevel : container.getAllSubLevels()) {
+                    HandleBlockEntity found = findHandleInSubLevel(subLevel, pos);
+                    if (found != null)
+                        return found;
+                }
+            }
+            return null;
         }
 
-        // Sub-level handle: rediscover near the tip.
-        HandleBlockEntity found = findHandleAhead(deployer);
-        if (found != null && found.getBlockPos().equals(heldHandlePos)) {
-            heldHandle = found;
-            return found;
+        BlockEntity be = level.getBlockEntity(pos);
+        return be instanceof HandleBlockEntity handle ? handle : null;
+    }
+
+    private static @Nullable HandleBlockEntity findHandleInSubLevel(SubLevel subLevel, BlockPos pos) {
+        BlockEntity embedded = subLevel.getPlot().getEmbeddedLevelAccessor().getBlockEntity(pos);
+        if (embedded instanceof HandleBlockEntity handle)
+            return handle;
+
+        for (BlockEntitySubLevelActor actor : subLevel.getPlot().getBlockEntityActors()) {
+            if (actor instanceof HandleBlockEntity handle && handle.getBlockPos().equals(pos))
+                return handle;
         }
         return null;
     }

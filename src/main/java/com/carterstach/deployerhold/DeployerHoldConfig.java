@@ -31,13 +31,28 @@ public final class DeployerHoldConfig {
         return server().tipSearchRadius.get();
     }
 
+    /**
+     * Pure tip formula: face + reach + hand − pull-in.
+     * Extracted so unit tests can cover geometry without loading Create configs.
+     */
+    public static double computeGripTipOffset(
+            double faceOffset,
+            double animatedReach,
+            double handLength,
+            double pullIn
+    ) {
+        return faceOffset + animatedReach + handLength - pullIn;
+    }
+
     /** World-space offset from block center to the animated grip tip along facing. */
     public static double gripTipOffset(double animatedReach) {
         DHServer config = server();
-        return config.faceOffset.getF()
-                + animatedReach
-                + config.handLength.getF()
-                - config.pullIn.getF();
+        return computeGripTipOffset(
+                config.faceOffset.getF(),
+                animatedReach,
+                config.handLength.getF(),
+                config.pullIn.getF()
+        );
     }
 
     /** Rider linear stiffness — higher values pull the rider toward the anchor faster. */

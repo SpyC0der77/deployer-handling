@@ -22,6 +22,10 @@ import net.minecraft.world.phys.Vec3;
 /**
  * In-game tutorial for Grip: Pull / Grip: Hitch on Create Deployers.
  * Physics / Sable constraints are illustrated with section motion, not live constraints.
+ *
+ * <p>Ponder registers English from {@code title}/{@code text} under
+ * {@code deployerhold.ponder.deployer_grip.header} and {@code text_N}; those keys in
+ * {@code en_us.json} are localization overrides (same pattern as Create).
  */
 public final class DeployerHoldScenes {
     private DeployerHoldScenes() {}

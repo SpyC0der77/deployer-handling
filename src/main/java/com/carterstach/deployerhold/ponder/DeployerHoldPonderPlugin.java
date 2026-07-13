@@ -8,9 +8,8 @@ import net.minecraft.resources.ResourceLocation;
 
 public class DeployerHoldPonderPlugin implements PonderPlugin {
     private static final ResourceLocation DEPLOYER = ResourceLocation.fromNamespaceAndPath("create", "deployer");
-    /** Reuse Create's deployer modes schematic — same layout, new storyboard. */
-    private static final ResourceLocation SCHEMATIC =
-            ResourceLocation.fromNamespaceAndPath("create", "deployer/modes");
+    /** Own schematic id so we do not collide with Create's {@code create:deployer/modes} storyboard. */
+    private static final ResourceLocation SCHEMATIC = DeployerHoldMod.asResource("deployer_grip");
 
     @Override
     public String getModId() {

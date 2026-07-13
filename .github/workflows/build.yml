@@ -44,8 +44,9 @@ jobs:
           at = Path("src/main/resources/META-INF/accesstransformer.cfg")
           mods_toml = Path("src/main/templates/META-INF/neoforge.mods.toml")
           changelog = Path("CHANGELOG.md")
+          ponder_nbt = Path("src/main/resources/assets/deployerhold/ponder/deployer_grip.nbt")
 
-          for path in (mixins, lang, at, mods_toml, changelog):
+          for path in (mixins, lang, at, mods_toml, changelog, ponder_nbt):
               assert path.is_file(), f"missing {path}"
 
           mixins_json = json.loads(mixins.read_text())
@@ -114,6 +115,7 @@ jobs:
           jar tf "$main_jar" | grep -q 'assets/deployerhold/lang/en_us.json'
           jar tf "$main_jar" | grep -q 'com/carterstach/deployerhold/ponder/DeployerHoldPonderPlugin.class'
           jar tf "$main_jar" | grep -q 'com/carterstach/deployerhold/client/DeployerHoldClient.class'
+          jar tf "$main_jar" | grep -q 'assets/deployerhold/ponder/deployer_grip.nbt'
           echo "Jar verification OK: $main_jar"
 
       - name: Upload build artifacts

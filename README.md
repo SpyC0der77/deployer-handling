@@ -44,6 +44,10 @@ Latch state is saved with the Deployer. After leaving and rejoining the world, t
 
 Server options (grab range, tip geometry, constraint stiffness) live in Create → Mod Config → Access Configs of other Mods → Deployer Hold (`config/deployerhold-server.toml`).
 
+Ponder the Deployer item for an in-game overview of Grip: Pull vs Grip: Hitch.
+
+See [CHANGELOG.md](CHANGELOG.md) for release notes.
+
 ## Build
 
 ```bash

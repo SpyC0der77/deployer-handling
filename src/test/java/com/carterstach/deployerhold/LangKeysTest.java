@@ -53,6 +53,13 @@ class LangKeysTest {
         assertHasNonBlank("deployerhold.tooltip.deployer.holding_handle");
     }
 
+    @Test
+    void ponderGripSceneKeysAreTranslated() {
+        assertHasNonBlank("deployerhold.ponder.deployer_grip.header");
+        for (int i = 1; i <= 6; i++)
+            assertHasNonBlank("deployerhold.ponder.deployer_grip.text_" + i);
+    }
+
     private static void assertHasNonBlank(String key) {
         if (!lang.has(key))
             fail("Missing lang entry: " + key);

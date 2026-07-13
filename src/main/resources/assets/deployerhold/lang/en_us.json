@@ -5,5 +5,13 @@
   "deployerhold.tooltip.deployer.latch_latched": "Latch: Latched",
   "deployerhold.tooltip.deployer.latch_ready": "Latch: Handle in range",
   "deployerhold.tooltip.deployer.latch_open": "Latch: Open",
-  "deployerhold.tooltip.deployer.latch_locked": "Latch: Target locked — won't move"
+  "deployerhold.tooltip.deployer.latch_locked": "Latch: Target locked — won't move",
+
+  "deployerhold.ponder.deployer_grip.header": "Gripping Simulated Handles",
+  "deployerhold.ponder.deployer_grip.text_1": "Deployer Hold adds grip modes that latch onto Simulated handles across Sable sub-levels",
+  "deployerhold.ponder.deployer_grip.text_2": "Wrench the Deployer's front face to cycle into Grip: Pull, then Grip: Hitch",
+  "deployerhold.ponder.deployer_grip.text_3": "When powered, the arm extends, latches the handle, then retracts while the grip stays active",
+  "deployerhold.ponder.deployer_grip.text_4": "Grip: Pull — the handle's sub-level (rider) is dragged toward the Deployer (anchor)",
+  "deployerhold.ponder.deployer_grip.text_5": "Grip: Hitch — the Deployer's sub-level rides toward the handle instead",
+  "deployerhold.ponder.deployer_grip.text_6": "Redstone-lock the Deployer to release the latch. Engineer's Goggles show mode and latch status"
 }

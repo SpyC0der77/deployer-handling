@@ -43,8 +43,9 @@ jobs:
           lang = Path("src/main/resources/assets/deployerhold/lang/en_us.json")
           at = Path("src/main/resources/META-INF/accesstransformer.cfg")
           mods_toml = Path("src/main/templates/META-INF/neoforge.mods.toml")
+          changelog = Path("CHANGELOG.md")
 
-          for path in (mixins, lang, at, mods_toml):
+          for path in (mixins, lang, at, mods_toml, changelog):
               assert path.is_file(), f"missing {path}"
 
           mixins_json = json.loads(mixins.read_text())
@@ -64,6 +65,7 @@ jobs:
               "deployerhold.tooltip.deployer.latch_ready",
               "deployerhold.tooltip.deployer.latch_latched",
               "deployerhold.tooltip.deployer.latch_locked",
+              "deployerhold.ponder.deployer_grip.header",
           }
           missing = required_keys - set(lang_json)
           assert not missing, f"missing lang keys: {sorted(missing)}"
@@ -71,6 +73,8 @@ jobs:
           toml = mods_toml.read_text()
           for needle in ("modId = \"${mod_id}\"", "[[mixins]]", "create", "sable", "simulated"):
               assert needle in toml, f"neoforge.mods.toml missing {needle!r}"
+
+          assert "0.1.0" in changelog.read_text(), "CHANGELOG.md should document 0.1.0"
 
           print("Resource validation OK")
           PY
@@ -108,6 +112,8 @@ jobs:
           jar tf "$main_jar" | grep -q 'deployerhold.mixins.json'
           jar tf "$main_jar" | grep -q 'META-INF/neoforge.mods.toml'
           jar tf "$main_jar" | grep -q 'assets/deployerhold/lang/en_us.json'
+          jar tf "$main_jar" | grep -q 'com/carterstach/deployerhold/ponder/DeployerHoldPonderPlugin.class'
+          jar tf "$main_jar" | grep -q 'com/carterstach/deployerhold/client/DeployerHoldClient.class'
           echo "Jar verification OK: $main_jar"
 
       - name: Upload build artifacts
